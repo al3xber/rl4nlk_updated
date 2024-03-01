@@ -12,7 +12,7 @@ import time
 from multiprocessing import Process, Queue, Array
 from queue import Empty
 
-
+from .particle_propagation.interfaces.propagator_interface import PropagatorInterface
 
 prefix = Path(os.environ["HOME"])
 prefix = Path("/home/al3xber")
@@ -200,7 +200,7 @@ def run(idx, args, worker_acc_info, remaining_info):
 
 
 
-class Thor_SCSI_Propagator():
+class Thor_SCSI_Propagator(PropagatorInterface):
 
 
     def __init__(self):
