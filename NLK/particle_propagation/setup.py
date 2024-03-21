@@ -12,5 +12,5 @@ from setuptools import setup
 
 setup(
     include_package_data=True,
-    package_data={'': ['package_files/*.npy','package_files/*.lat']}
+    package_data={'': ['particle_propagation/package_files/*']}
 )

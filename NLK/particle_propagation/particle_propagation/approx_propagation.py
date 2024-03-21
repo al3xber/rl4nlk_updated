@@ -1,17 +1,22 @@
 import numpy as np
 from scipy.stats import norm
 
+import importlib.resources
+
+from interfaces.propagator_interface import PropagatorInterface
 
 
 
 
-class Approximated_Propagator():
+
+class Approximated_Propagator(PropagatorInterface):
 
     def __init__(self):
         
         #information for kicker usage
-        self.round_survived_array = np.load("Zone_array5.npy")[0]
-        self.optimal_NLK_strength_array = np.load("Ztwo_array5.npy")[0]
+        with importlib.resources.path('particle_propagation', 'package_files') as data_path:
+            self.round_survived_array = np.load(data_path / "Zone_array5.npy")[0]
+            self.optimal_NLK_strength_array = np.load(data_path / "Ztwo_array5.npy")[0]
         
         self.x_list = np.linspace(-100.0e-3,90e-3,1280)
         self.px_list = np.linspace(-12e-3,7e-3,640)
@@ -22,8 +27,9 @@ class Approximated_Propagator():
         
         
         #information for round to round behaviour
-        self.roundX = np.load("ZroundX.npy").T
-        self.roundPX = np.load("ZroundPX.npy").T
+        with importlib.resources.path('particle_propagation', 'package_files') as data_path:
+            self.roundX = np.load(data_path / "ZroundX.npy").T
+            self.roundPX = np.load(data_path / "ZroundPX.npy").T
                 
         self.x_list2 = np.linspace(-45e-3,24.5e-3,1280)
         self.px_list2 = np.linspace(-0.003,0.003,1280)
@@ -32,11 +38,11 @@ class Approximated_Propagator():
         self.px_min2, self.px_max2, self.px_len2 = self.px_list2[0], self.px_list2[-1], len(self.px_list2)
      
     
-    def _single_round_without_kick(self,x,px,runde,noise_x,noise_px):
+    def _single_round_without_kick(self, x, px, noise_x_sample, noise_px_sample):
 
         #add noise 
-        x += noise_x     
-        px += noise_px
+        x += noise_x_sample     
+        px += noise_px_sample
 
 
         #get indices within round to round behaviour files
@@ -50,7 +56,9 @@ class Approximated_Propagator():
         px = px[valid_idx]
         idx_x = idx_x[valid_idx]
         idx_px = idx_px[valid_idx]
-
+        
+        if len(x) == 0:
+            return np.array([]), np.array([])
 
         #remove points that contain nan
         where_nan = np.vstack([self.roundX[idx_px,  idx_x],
@@ -69,7 +77,9 @@ class Approximated_Propagator():
         idx_x = idx_x[valid_idx]
         idx_px = idx_px[valid_idx]
         points = np.vstack([x, px])
-
+        
+        if len(x) == 0:
+            return np.array([]), np.array([])
 
         #calculate for each point the distance to the individual corner points
         distance_matrix = np.vstack([np.sum(np.abs(points-
@@ -113,13 +123,13 @@ class Approximated_Propagator():
         x = points[0,:]
         px = points[1,:]
 
-
+        
         return x,px
 
 
     
-    def propagation_single_round(x_list, px_list, kicker_strength, 
-                             noise_x=0, noise_px=0, noise_NLK=0):
+    def propagation_single_round(self, x, px, kicker_strength, 
+                                 noise_x, noise_px, noise_NLK):
         """
         Function that propagates electrons for a single round given NLK strength and noise.
         Note that in this mode we can only propagate electrons for a single round, if the NLK is not used!
@@ -133,15 +143,17 @@ class Approximated_Propagator():
         if kicker_strength != 0.0:
             raise Exception("For the approximated mode, only the propagation of a single \
 round can be done if the NLK is not activated.")
-            
-        return _single_round_without_kick(self,x,px,runde, noise_x=noise_x, noise_px=noise_x)
+        
+        noise_x_sample = np.random.normal(0, noise_x)
+        noise_px_sample = np.random.normal(0, noise_px)
+        
+        return self._single_round_without_kick(x, px, noise_x_sample, noise_px_sample)
  
 
         
     
-    def propagation_1000_rounds(self, x, px, when_activate_NLK, kicker_strength,
+    def propagation_thousand_rounds(self, x, px, when_activate_NLK, kicker_strength,
                  noise_x = 0.0, noise_px = 0.0, noise_NLK = 0.0, noise_first_round = 0.0):
-        
         
         #until the NLK activation propagate the electrons without kick through the accelerator   
         for runde in range(when_activate_NLK):
@@ -152,8 +164,11 @@ round can be done if the NLK is not activated.")
             else:   
                 noise_x_sample = np.random.normal(0, noise_x)
                 noise_px_sample = np.random.normal(0, noise_px)
-
-            x,px = self._single_round_without_kick(self,x,px,runde,noise_x= noise_x_sample, noise_px=noise_px_sample)
+            
+            x,px = self._single_round_without_kick(x, px, noise_x_sample, noise_px_sample)
+            
+            if len(x) == 0:
+                return 0, np.array([]), np.array([])
         
             
         #NLK is now activated!
@@ -167,6 +182,7 @@ round can be done if the NLK is not activated.")
             noise_px_sample = np.random.normal(0,noise_px)
 
         #add noise 
+        
         x += noise_x_sample     
         px += noise_px_sample
 
@@ -174,17 +190,20 @@ round can be done if the NLK is not activated.")
         
         
         #get indices within NLK usage files
-        idx_x  = np.floor(self.x_len*((self.x-self.x_min)/(self.x_max-self.x_min))).astype("int")
-        idx_px = np.floor(self.px_len*((self.px-self.px_min)/(self.px_max-self.px_min))).astype("int")
+        idx_x  = np.floor(self.x_len*((x-self.x_min)/(self.x_max-self.x_min))).astype("int")
+        idx_px = np.floor(self.px_len*((px-self.px_min)/(self.px_max-self.px_min))).astype("int")
 
         #remove points that are out of the valid area
         valid_idx = (idx_x >= 0)*(idx_x < self.x_len - 1)*(idx_px >= 0)*(idx_px < self.px_len - 1)  
 
-        self.x = self.x[valid_idx]
-        self.px = self.px[valid_idx]
+        x = x[valid_idx]
+        px = px[valid_idx]
         idx_x = idx_x[valid_idx]
         idx_px = idx_px[valid_idx]
-
+        
+        if len(x) == 0:
+                return 0, np.array([]), np.array([])
+            
         #check if each electron has a neighbor that can be successfully injected
         rounds_survived = np.vstack([self.round_survived_array[idx_px,  idx_x],
                                      self.round_survived_array[idx_px,  idx_x+1],
@@ -194,27 +213,27 @@ round can be done if the NLK is not activated.")
         valid_idx = rounds_survived > 1  
         
         #remove points where no neighbor point has survived 1000 rounds
-        x_mean = np.mean(self.x)
-        px_mean = np.mean(self.px)
-
-        self.x = self.x[valid_idx]
-        self.px = self.px[valid_idx]
+        x = x[valid_idx]
+        px = px[valid_idx]
         idx_x = idx_x[valid_idx]
         idx_px = idx_px[valid_idx]
-
-        self.points = np.vstack([self.x,self.px])
+        
+        if len(x) == 0:
+                return 0, np.array([]), np.array([])
+            
+        points = np.vstack([x,px])
 
         #optimal kicker strength calculation
         #we use interpolation
-        assert self.points.shape == np.vstack([self.x_list[idx_x],self.px_list[idx_px]]).shape
+        assert points.shape == np.vstack([self.x_list[idx_x],self.px_list[idx_px]]).shape
         #calulate distance to each neighbour in the grid
-        distance_matrix = np.vstack([np.sum((self.points-
+        distance_matrix = np.vstack([np.sum((points-
                                              np.vstack([self.x_list[idx_x],self.px_list[idx_px]]))**2,axis=0),
-                                     np.sum((self.points-
+                                     np.sum((points-
                                              np.vstack([self.x_list[idx_x],self.px_list[idx_px+1]]))**2,axis=0),
-                                     np.sum((self.points-
+                                     np.sum((points-
                                              np.vstack([self.x_list[idx_x+1],self.px_list[idx_px]]))**2,axis=0),
-                                     np.sum((self.points-
+                                     np.sum((points-
                                              np.vstack([self.x_list[idx_x+1],self.px_list[idx_px+1]]))**2,axis=0)]).T
 
         #normalize
@@ -225,7 +244,7 @@ round can be done if the NLK is not activated.")
         distance_matrix = distance_matrix/np.sum(distance_matrix,axis=1)[:,None]
 
         assert np.isclose(np.sum(distance_matrix[0]),1.0)
-        assert distance_matrix.shape == (len(self.x),4)
+        assert distance_matrix.shape == (len(x),4)
 
         #get for each electron the optimal Kicker strength
         optimal_NLK_strength_matrix = np.vstack([self.optimal_NLK_strength_array[idx_px,  idx_x],
@@ -239,12 +258,13 @@ round can be done if the NLK is not activated.")
         optimal_kicker_strength = np.sum(distance_matrix * optimal_NLK_strength_matrix,axis = 1)  
 
         #create noise
-        noise_NLK_sample = np.random.normal(0,self.noise_NLK)  
+        noise_NLK_sample = np.random.normal(0, noise_NLK)  
 
         #calculate reward and add noise to kicker strength
-        reward = ((self.points.shape[1])/1000)*(985/1000)*np.sum(np.exp(-(14.5*(kicker_strength+noise_NLK_sample-optimal_kicker_strength))**4)) / self.reward_normalization
-
-        return reward, x, px, True 
+        reward = (985/1000)*np.sum(np.exp(-(14.5*(kicker_strength+noise_NLK_sample-optimal_kicker_strength))**4)) 
+                    #((points.shape[1])/1000)* does this needs to be included???
+        
+        return reward, x, px 
 
 
 

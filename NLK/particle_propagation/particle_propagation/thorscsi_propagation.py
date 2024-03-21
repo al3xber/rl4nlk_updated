@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from thor_scsi.factory import accelerator_from_config
 from thor_scsi.pyflame import Config
 import thor_scsi.lib as tslib
@@ -9,15 +7,18 @@ import gtpsa
 import os
 import time
 
+import importlib.resources
+
 from multiprocessing import Process, Queue, Array
 from queue import Empty
 
+from interfaces.propagator_interface import PropagatorInterface
 
 
-prefix = Path(os.environ["HOME"])
-prefix = Path("/home/al3xber")
-t_dir =  prefix / "Desktop" / "Workspace"      #redirect to lattice
-t_file = t_dir / "BII_NLKmode_3d_start.lat"      
+t_file = "BII_NLKmode_3d_start.lat"      
+
+
+
 
 
 """
@@ -141,14 +142,13 @@ def particle_propagation(index,acc_info,remaining_info):
             nlkf_intp.set_scale(0.0)
         #if round is equal to NLK-activation-round activate the NLK with given strength
         elif runde == when_activate_NLK:   
-            noise_NLK_sample = np.random.normal(0,noise_NLK)            #create noise
+            noise_NLK_sample = np.random.normal(0,noise_NLK)          #create noise
             nlkf_intp.set_scale(kicker_strength+noise_NLK_sample)     #add noise and set kicker strength
         else:
             raise ValueError("should not end up here")
         
         #create state space vector 
         ps = create_state_space_vector(mu_x=x,mu_px=px)   
-        
         #create noise
         if runde == 0:
             noise_x_sample = np.random.normal(0,noise_first_round)
@@ -159,11 +159,9 @@ def particle_propagation(index,acc_info,remaining_info):
         #add noise
         ps.x += noise_x_sample     
         ps.px += noise_px_sample
-        
         #propagate through accelerator
         result = acc.propagate(calc_config, ps)
         assert result==len(acc) 
-
         #update the x and px values
         n_x = ps.x
         n_px = ps.px
@@ -171,7 +169,7 @@ def particle_propagation(index,acc_info,remaining_info):
         px = n_px
         
         #check if it crashed into the septum
-        if x>0.015:   
+        if x>0.015:  
             return False, np.nan, np.nan, (x_list[index],px_list[index])
         #if not continue with the remaining rounds
         elif x<=0.015:
@@ -200,68 +198,82 @@ def run(idx, args, worker_acc_info, remaining_info):
 
 
 
-class Thor_SCSI_Propagator():
+class Thor_SCSI_Propagator(PropagatorInterface):
 
 
     def __init__(self):
-        pass
+        #creating simulation of the accelerator
+        with importlib.resources.path('particle_propagation', 'package_files') as data_path:
+            default_config_path = data_path / t_file
+            #contents = default_config_path.read_text()
+            self.acc = accelerator_from_config(default_config_path)
+        
+        
+        
+        self.calc_config = tslib.ConfigType()
+
+        #Description of NLK
+        self.nlkfk = self.acc.find("KDNL1KR", 0)
+        self.nlk_name = self.nlkfk.name
+        _, self.nlkf_intp = create_nlk_interpolation(self.nlk_name)
+        self.nlkfk.set_field_interpolator(self.nlkf_intp)
+        assert(self.nlkfk.name == self.nlk_name)
+
         
     
-    def propagation_single_round(x_list, px_list, kicker_strength, 
-                                 noise_x=0, noise_px=0, noise_NLK=0):
+    def propagation_single_round(self, x_list, px_list, kicker_strength, 
+                                 noise_x, noise_px, noise_NLK):
         """
         Function that propagates electrons for a single round given NLK strength and noise.
         Input:   - x_list (list/np.ndarray) x-information of electrons
                  - px_list (list/np.ndarray) px-information of electrons
                  - kicker_strength (float)   strength of NLK, value in [-1, 1]
-                 - noises (floats)
+                 - noises
         Output:
                  - x_list, px_list information of the electrons after one round
         """
-
-        x_list, px_list, when_activate_NLK, kicker_strength, noise_x, noise_px, noise_NLK, noise_first_round = remaining_info 
-
-        #creating simulation of the accelerator
-        acc = accelerator_from_config(t_file)
-        calc_config = tslib.ConfigType()
-
-        #Description of NLK
-        nlkfk = acc.find("KDNL1KR", 0)
-        nlk_name = nlkfk.name
-        _, nlkf_intp = create_nlk_interpolation(nlk_name)
-        nlkfk.set_field_interpolator(nlkf_intp)
-        assert(nlkfk.name == nlk_name)
+        
+        
+        
+        
+        
 
         #set a random seed
-        np.random.seed(round(float(str(time.time())[6:]))*(index+1))    
+        np.random.seed(round(float(str(time.time())[6:])))    
 
+        noise_NLK_sample = 0.0    
+        if not (kicker_strength == 0.0):   #if NLK not activated generate noise sample, 
+                                           #else the NLK isn't used so let strength 0  
+            noise_NLK_sample = np.random.normal(0,noise_NLK)        #sample NLK noise
         #set kicker strength
-        noise_NLK_sample = np.random.normal(0,noise_NLK)            #calculate npose noise
-        nlkf_intp.set_scale(kicker_strength+noise_NLK_sample)       #set kicker strength    
+        self.nlkf_intp.set_scale(kicker_strength+noise_NLK_sample)       
 
+        #generate noise, we use the same noise for each electron.
+        noise_x_sample = np.random.normal(0,noise_x)
+        noise_px_sample = np.random.normal(0,noise_px)
+
+        
         #go through each electron
+        output_x_list, output_px_list = [], []
         for i in range(len(x_list)):
             #create state space vector
             ps = create_state_space_vector(mu_x=x_list[i],mu_px=px_list[i]) 
 
-            #generate noise
-            noise_x_sample = np.random.normal(0,noise_x)
-            noise_px_sample = np.random.normal(0,noise_px)
 
             #add noise
             ps.x += noise_x_sample     
             ps.px += noise_px_sample
 
             #propagate through the accelerator
-            result = acc.propagate(calc_config, ps)
-            assert result==len(acc) 
+            result = self.acc.propagate(self.calc_config, ps)
+            assert result==len(self.acc) 
 
             #update x and px information
-            x_list[i] = ps.x
-            px_list[i] = ps.px
+            output_x_list.append(ps.x)
+            output_px_list.append(ps.px)
 
 
-        return x_list, px_list
+        return np.array(output_x_list), np.array(output_px_list)
 
 
 
@@ -270,13 +282,17 @@ class Thor_SCSI_Propagator():
     
     
        
-    def propagation_1000_rounds(self, x_list, px_list, when_activate_NLK, kicker_strength,
+    def propagation_thousand_rounds(self, x_list, px_list, when_activate_NLK, kicker_strength,
                  noise_x = 0.0, noise_px = 0.0, noise_NLK = 0.0, noise_first_round = 0.0):
         """
         Input: x_list,px_list (list/np.ndarray); List of x and px values
                when_activate_NLK (int) in which round to activate the NLK
                kicker_strengh (float in [-1,1]) strength of NLK in activation round
                noises (floats)
+        Output:
+              - x_list, px_list information of the electrons after one round
+              Note!! the arrays will not be correctly ordered.
+
         """
         assert len(x_list)==len(px_list)
 
@@ -285,7 +301,8 @@ class Thor_SCSI_Propagator():
         self.px_list = px_list
         self.kicker_strength = kicker_strength
         self.when_activate_NLK = when_activate_NLK
-
+        
+        
         self.noise_x = noise_x
         self.noise_px = noise_px
         self.noise_NLK = noise_NLK
@@ -374,7 +391,7 @@ class Thor_SCSI_Propagator():
                             x_result_array[idx : idx + 1] = x_process 
                             px_result_array[idx : idx + 1]=px_process
                             
-                            idx+=1
+                            idx += 1
                         except Empty:
                             break
             
@@ -436,7 +453,7 @@ class Thor_SCSI_Propagator():
         px_result_arr = np.frombuffer(px_result_array.get_obj())
         px_result_arr = px_result_arr.reshape((len(self.x_list),1))
 
-        return np.sum(results),x_result_array,px_result_array #,starts
+        return np.sum(results), x_result_arr, px_result_arr
     
     
 
